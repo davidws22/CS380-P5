@@ -1,0 +1,229 @@
+// ============================================================================
+// file: UdpClient.java
+// ============================================================================
+// Programmer: David Shin
+// Date: 11/14/2017
+// Class: CS 380 ("Computer Networks")
+// Time: T/TH 3:00 - 4:50pm
+// Instructor: Mr. Davarpanah
+// Project: 5
+//
+// Description: Implementation of UDP on IPv4.
+//
+//
+// ============================================================================
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.PrintStream;
+import java.net.Socket;
+import java.util.Random;
+import java.text.DecimalFormat;
+
+public class UdpClient
+{
+    
+    public static void main(String[] args)
+    {
+	Socket socket;
+	//byte[] data;
+	
+	try
+	{
+	    socket = new Socket("18.221.102.182", 38005);
+	    System.out.println("Connected to server");
+
+	    //setting up input stream
+	    InputStream is = socket.getInputStream();
+
+	    //setting up output stream
+	    OutputStream os = socket.getOutputStream();
+	    PrintStream ps = new PrintStream(os);
+
+	    //send hard-coded 0xDEADBEEF to server
+	    byte[] handshake = {(byte)0xDE,(byte)0xAD,(byte)0xBE,(byte)0xEF};
+	    ps.write(FrameFill(4, handshake));
+	    System.out.print("Handshake response: ");
+	    
+	    //receive server response
+    	    System.out.print("0x");
+	    byte target = 0;
+	    for (int i = 0; i < 4; ++i){
+		target = (byte) is.read();
+		System.out.printf("%X", target);
+	    }
+	    System.out.println();
+	    //get the port number
+	    int port = getPort(socket);
+	    double sentTime = 0, timeRan = 0, avg = 0, elapsed = 0;
+	    System.out.printf("Port number received: %d\n",port);
+	    int length = 1;
+
+	    for (int i = 0; i < 12; ++i){
+		length <<= 1;
+		byte[] data = getData(length);
+		System.out.println("Data length: " + length);
+
+		ps.write(FrameFill(length+8, UdpHeader(port, data)));
+		sentTime = System.currentTimeMillis();
+		System.out.print("Response: ");
+ 
+		System.out.print("0x");
+		byte received = 0;
+		for (int j = 0; j < 4; ++j){
+		    received = (byte) is.read();
+		    System.out.printf("%X", received);
+		}
+		System.out.println();
+    
+		timeRan = System.currentTimeMillis();
+		elapsed = timeRan - sentTime;
+		System.out.println("RTT: " + elapsed + "ms\n");
+		avg += elapsed;
+	    }
+	    
+	    System.out.printf("Average RTT: %.2f ms\n", (avg/12));
+	} catch (IOException e) {
+	    e.printStackTrace();
+	}
+    }
+
+    //get port number
+    public static int getPort(Socket socket){
+	try {
+	    int port = -1;
+	    InputStream is = socket.getInputStream();
+	    byte[] received = new byte[2];
+	    received[0] = (byte) is.read();
+	    received[1] = (byte) is.read();
+	    port = ((received[0] & 0xFF) << 8) | (received[1] & 0xFF);
+	    return port;
+	} catch (Exception e) { }
+	return -1;
+    }
+    
+    public static byte[] FrameFill(int size, byte[] data){
+	short length = (short) (20+size);
+	byte[] packet = new byte[length];
+
+	packet[0] = 0x45; //version 4, header length 5
+	packet[1] = 0x0; //type of service 
+	packet[2] = (byte) ((length >> 8) & 0xFF); //Header + Data(0)?
+	packet[3] = (byte) (length & 0xFF); //20+2*
+	packet[4] = 0x0; //identifier
+	packet[5] = 0x0;
+
+	packet[6] = (0x1 << 6); //fragment
+
+	packet[7] = 0x0; //offset
+	packet[8] = 0x32; //50 TTL
+	packet[9] = 0x11; //TCP = 11
+	packet[10] = 0x0; //insert verified checked sum
+	packet[11] = 0x0;
+
+	packet[12] = (byte) 192; //source address
+	packet[13] = (byte) 168;
+	packet[14] = (byte) 1;
+	packet[15] = (byte) 64;
+
+	packet[16] = (byte) 18; //destination address
+	packet[17] = (byte) 221;
+	packet[18] = (byte) 102;
+	packet[19] = (byte) 182;
+
+	short CheckedSum = checksum(packet);
+	packet[10] = (byte) ((CheckedSum >> 8) & 0xFF);
+	packet[11] = (byte) (CheckedSum & 0xFF);
+
+	for (int i = 20; i < 20+data.length; ++i){
+	    packet[i] = data[i-20];
+	}
+	return packet;
+    }
+    
+    public static byte[] UdpHeader(int port, byte[] data){
+	int length = 8 + data.length;
+	byte[] UDP = new byte[length];
+	UDP[0] = (byte) 0xFF;
+	UDP[1] = (byte) 0xFF;
+	UDP[2] = (byte) ((port & 0xFF00) >>> 8);
+	UDP[3] = (byte) (port & 0x00FF);
+	UDP[4] = (byte) (length >> 8);
+	UDP[5] = (byte) length;
+	UDP[6] = 0;
+	UDP[7] = 0;
+	for (int i = 8; i < length; ++i){
+	    UDP[i] = data[i-8];
+	}
+	short checksum = pseudoHeader(length, port, data);
+	UDP[6] = (byte) ((checksum >> 8) & 0xFF);
+	UDP[7] = (byte) (checksum & 0xFF);
+
+	return UDP;
+    }
+
+    public static short pseudoHeader(int UdpLength, int port, byte[] data){
+	int length = 20 + UdpLength;
+	byte[] packet = new byte[length];
+	packet[0] = (byte) 192;
+	packet[1] = (byte) 168;
+	packet[2] = (byte) 1;
+	packet[3] = (byte) 64;
+	packet[4] = (byte) 18;
+	packet[5] = (byte) 221;
+	packet[6] = (byte) 102;
+	packet[7] = (byte) 182;
+	packet[8] = 0x0;
+	packet[9] = 0x11;
+	packet[10] = (byte) (UdpLength >> 8);
+	packet[11] = (byte) (UdpLength & 0xFF);
+	packet[12] = (byte) 0xFF;
+	packet[13] = (byte) 0xFF;
+	packet[14] = (byte) ((port & 0xFF00) >>> 8);
+	packet[15] = (byte) (port & 0x00FF);
+	packet[16] = (byte) (UdpLength >> 8);
+	packet[17] = (byte) (UdpLength & 0xFF);
+
+	for (int i = 0; i < data.length; ++i){
+	    packet[i+18] = data[i];
+	}
+	return checksum(packet);
+    }
+
+
+    public static byte[] getData(int size){
+	Random rand = new Random();
+	byte[] data = new byte[size];
+	for (int i = 0; i < size; ++i){
+	    data[i] = (byte) rand.nextInt(256);
+	}
+	return data;
+    }
+    public static short checksum(byte[] b) {
+	int length = b.length;
+	int i = 0;
+	long returnValue = 0;
+	long sum = 0;
+
+	while (length > 1) {
+	    sum += ((b[i] << 8 & 0xFF00) | ((b[i + 1]) & 0x00FF));
+	    i += 2;
+	    length -= 2;
+	    if ((sum & 0xFFFF0000) > 0) {
+		sum &= 0xFFFF;
+		sum++;
+	    }
+	}
+	//if statement triggers if we are given an odd number of bytes
+	if (length > 0) {
+	    sum += b[i] << 8 & 0xFF00;
+	    if ((sum & 0xFFFF0000) > 0) {
+		sum &= 0xFFFF;
+		sum++;
+	    }
+	}
+	returnValue = (~((sum & 0xFFFF) + (sum >> 16))) & 0xFFFF;
+	return (short) returnValue;
+    }
+    
+}
